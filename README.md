@@ -28,6 +28,11 @@ Räumart, Kugel-Einstellung und App-Auswahl werden gespeichert. Eine vorhandene 
 
 Abrutschender Schnee fällt hinter seinem Herkunftsfenster. Die Schneeauflagen an gerundeten Fensterkanten sind angenähert. Am unteren Bildschirmrand bleibt eine flache Schneeschicht.
 
+## Passende Wallpaper
+4k Ultra HD 2160p (3840x2160): https://image-0.uhdpaper.com/wallpaper/winter-cabin-christmas-tree-snowman-night-4k-wallpaper-uhdpaper.com-858@0@i.jpg
+2k Quad HD 1440p (2560x1440): https://image-0.uhdpaper.com/wallpaper/winter-cabin-christmas-tree-snowman-night-2k-wallpaper-uhdpaper.com-858@0@i.jpg
+Full HD 1080p (1920x1080): https://image-0.uhdpaper.com/wallpaper/winter-cabin-christmas-tree-snowman-night-hd-wallpaper-uhdpaper.com-858@0@i.jpg
+
 ## Selbst bauen
 
 Benötigt werden die Apple Command Line Tools mit einem aktuellen Swift-Compiler. Installieren über `xcode-select --install`.
