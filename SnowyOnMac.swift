@@ -19,7 +19,7 @@ enum Cfg {
     static let gravity: CGFloat = 900        // gravity for snow sliding off
     static let pollInterval = 1.0 / 30.0     // how often window positions are checked (s)
     static let maxClumps = 900               // max number of falling snow clumps at once
-    static let dockPileMax: CGFloat = 18     // max snow height on the Dock
+    static let dockPileMax: CGFloat = 9      // keep the Dock's snow ledge shallow
     static let dockPad: CGFloat = 4          // estimate the shelf border outside the Dock icon area
     static let dockCornerInsetMax: CGFloat = 18
     static let dockTopOffset: CGFloat = -1   // lower it if the snow floats above the Dock, raise it if it sinks in
@@ -477,6 +477,7 @@ final class SnowScene: SKScene {
     let world = SKNode()
     let dockTracker = DockTracker()
     var dockPile: Pile?
+    var dockClearingUntil: CGFloat = 0
     var dockRect: CGRect?
     var dockAcc: CGFloat = 1
     var lastDockStatus = ""
@@ -639,6 +640,11 @@ final class SnowScene: SKScene {
             }
         case .snowplow:
             updateSnowplows(dt)
+        }
+        if let pile = dockPile, pile.h.contains(where: { $0 >= pile.maxH }) {
+            release(pile, vel: .zero, id: SnowScene.dockID, sliding: true)
+            pile.redraw()
+            dockClearingUntil = t + 0.8
         }
     }
 
@@ -1316,8 +1322,13 @@ final class SnowScene: SKScene {
                    !(f.isClump && f.ignoreID == SnowScene.dockID && t < f.ignoreUntil) {
                     let s = d.surface(c)
                     if prevY >= s && p.y < s {
-                        d.add(at: c, amount: (f.isClump ? 1.6 : f.size * 0.16) * Cfg.dockGain)
-                        gone = true
+                        if t < dockClearingUntil {
+                            // Let the rest of the same avalanche pass through the cleared Dock.
+                            if f.isClump { dockClearingUntil = t + 0.8 }
+                        } else {
+                            d.add(at: c, amount: (f.isClump ? 1.6 : f.size * 0.16) * Cfg.dockGain)
+                            gone = true
+                        }
                     }
                 }
                 // Then check window tops, front to back
