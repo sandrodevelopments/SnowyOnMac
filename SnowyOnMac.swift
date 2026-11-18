@@ -35,6 +35,7 @@ enum Cfg {
 // MARK: - Find the Dock (needs Accessibility permission)
 
 @MainActor final class DockTracker {
+    static let shared = DockTracker()
     private var trusted = false
     private var warned = false
     var lastError = ""
@@ -447,9 +448,41 @@ enum SnowballMode: String, CaseIterable {
     }
 }
 
+@MainActor enum DesktopWindows {
+    private static var refreshedAt: TimeInterval = -1
+    private static var windows: [[String: Any]] = []
+
+    static func current() -> [[String: Any]] {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - refreshedAt >= Cfg.pollInterval {
+            windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                 kCGNullWindowID) as? [[String: Any]] ?? []
+            refreshedAt = now
+        }
+        return windows
+    }
+}
+
 // MARK: - Scene
 
 final class SnowScene: SKScene {
+    var screenFrame = CGRect.zero
+    var screenVisibleFrame = CGRect.zero
+    var primaryScreenTop: CGFloat = 0
+    var targetFlakes = Cfg.targetFlakes
+    var clumpLimit = Cfg.maxClumps
+    var mousePosition: CGPoint { localPoint(from: NSEvent.mouseLocation) }
+
+    func localPoint(from point: CGPoint) -> CGPoint {
+        CGPoint(x: point.x - screenFrame.minX, y: point.y - screenFrame.minY)
+    }
+
+    func localWindowRect(from rect: CGRect) -> CGRect {
+        CGRect(x: rect.minX - screenFrame.minX,
+               y: primaryScreenTop - rect.maxY - screenFrame.minY,
+               width: rect.width, height: rect.height)
+    }
+
     var flakes: [Flake] = []
     var pool: [Flake] = []
     var piles: [Int: Pile] = [:]                 // window number -> snow on top of it
@@ -475,7 +508,7 @@ final class SnowScene: SKScene {
     var t: CGFloat = 0
     let myPID = getpid()
     let world = SKNode()
-    let dockTracker = DockTracker()
+    let dockTracker = DockTracker.shared
     var dockPile: Pile?
     var dockClearingUntil: CGFloat = 0
     var dockRect: CGRect?
@@ -483,7 +516,7 @@ final class SnowScene: SKScene {
     var lastDockStatus = ""
     var balls: [Snowball] = []
     weak var activeBall: Snowball?
-    var lastMouse = NSEvent.mouseLocation
+    var lastMouse = CGPoint.zero
     var ballTex: SKTexture?
     var snowfallPaused = false
     var dragBall: Snowball?
@@ -501,7 +534,7 @@ final class SnowScene: SKScene {
         speckTex = makeSpeckTexture()
         addChild(world)
         resetGround()
-        for _ in 0..<Cfg.targetFlakes { spawnFlake(y: rnd(0, size.height)) }
+        for _ in 0..<targetFlakes { spawnFlake(y: rnd(0, size.height)) }
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
@@ -591,7 +624,7 @@ final class SnowScene: SKScene {
         }
         let total = p.total
         guard total > 0.5 else { p.clear(); return }
-        let budget = CGFloat(max(0, Cfg.maxClumps - flakes.count + Cfg.targetFlakes))
+        let budget = CGFloat(max(0, clumpLimit - flakes.count + targetFlakes))
         let k = min(1, budget / max(1, total / 3.5))
         for c in 0..<p.count where p.h[c] > 0.6 {
             var amount = p.h[c] / 3.5 * k
@@ -678,7 +711,7 @@ final class SnowScene: SKScene {
 
     func resetFrameClock() {
         lastT = 0
-        lastMouse = NSEvent.mouseLocation
+        lastMouse = mousePosition
     }
 
     func endDrag() {
@@ -693,7 +726,7 @@ final class SnowScene: SKScene {
     /// does it catch clicks, so you can grab the ball without clicking the window underneath.
     func updateMouseCapture() {
         guard let w = view?.window else { return }
-        let capture = dragBall != nil || ballAt(NSEvent.mouseLocation) != nil
+        let capture = dragBall != nil || ballAt(mousePosition) != nil
         if w.ignoresMouseEvents == capture { w.ignoresMouseEvents = !capture }
     }
 
@@ -774,7 +807,7 @@ final class SnowScene: SKScene {
         b.specks.zRotation -= (target.x - b.x) / b.r
         b.x = target.x
         b.y = target.y
-        lastMouse = NSEvent.mouseLocation
+        lastMouse = mousePosition
     }
 
     /// A ball dropped just above another ball (that isn't already a full snowman) gets stacked on it
@@ -902,6 +935,7 @@ final class SnowScene: SKScene {
 
     /// Which snow surface is the mouse hovering over? Dock first, then windows front to back, then the ground.
     func surfaceUnderMouse(_ m: CGPoint) -> Pile? {
+        guard CGRect(origin: .zero, size: size).contains(m) else { return nil }
         // Hovering over a snowball counts as hovering over the snow it sits on. Without this, a big ball
         // stops rolling as soon as the cursor rises above the thin snow band, which makes pushing jerky.
         for b in balls where !b.falling && !b.dragging && !b.node.isHidden && b.below == nil {
@@ -919,7 +953,7 @@ final class SnowScene: SKScene {
     }
 
     func updateRolling() {
-        let m = NSEvent.mouseLocation     // same coordinates as the scene (origin bottom-left of main screen)
+        let m = mousePosition
         let dx = m.x - lastMouse.x
         lastMouse = m
         guard let p = surfaceUnderMouse(m), canFormSnowball(on: p) else { activeBall = nil; return }
@@ -1148,24 +1182,22 @@ final class SnowScene: SKScene {
     }
 
     func pollWindows(dt: CGFloat) {
-        let H = size.height
         var newOrder: [(id: Int, rect: CGRect)] = []
         var newBackgroundWindowIDs: Set<Int> = []
-        if let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
-            for w in info {
-                guard let layerN = w[kCGWindowLayer as String] as? NSNumber, layerN.intValue == 0,
-                      let pidN = w[kCGWindowOwnerPID as String] as? NSNumber, pidN.int32Value != myPID,
-                      let numN = w[kCGWindowNumber as String] as? NSNumber,
-                      let bd = w[kCGWindowBounds as String] as? NSDictionary,
-                      let b = CGRect(dictionaryRepresentation: bd as CFDictionary) else { continue }
-                let alpha = (w[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
-                if alpha < 0.05 || b.width < 80 || b.height < 40 { continue }
-                if backgroundApplicationPIDs.contains(pidN.int32Value) {
-                    newBackgroundWindowIDs.insert(numN.intValue)
-                }
-                newOrder.append((id: numN.intValue,
-                                 rect: CGRect(x: b.minX, y: H - b.maxY, width: b.width, height: b.height)))
+        for w in DesktopWindows.current() {
+            guard let layerN = w[kCGWindowLayer as String] as? NSNumber, layerN.intValue == 0,
+                  let pidN = w[kCGWindowOwnerPID as String] as? NSNumber, pidN.int32Value != myPID,
+                  let numN = w[kCGWindowNumber as String] as? NSNumber,
+                  let bd = w[kCGWindowBounds as String] as? NSDictionary,
+                  let b = CGRect(dictionaryRepresentation: bd as CFDictionary) else { continue }
+            let alpha = (w[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
+            if alpha < 0.05 || b.width < 80 || b.height < 40 { continue }
+            let localRect = localWindowRect(from: b)
+            guard localRect.intersects(CGRect(origin: .zero, size: size)) else { continue }
+            if backgroundApplicationPIDs.contains(pidN.int32Value) {
+                newBackgroundWindowIDs.insert(numN.intValue)
             }
+            newOrder.append((id: numN.intValue, rect: localRect))
         }
 
         // Closed / minimized windows: their snow just falls
@@ -1218,19 +1250,17 @@ final class SnowScene: SKScene {
         var r: CGRect? = nil
         var status: String
         if let f = dockTracker.frame() {
-            var s = CGRect(x: f.minX - Cfg.dockPad, y: size.height - f.maxY,
-                           width: f.width + 2 * Cfg.dockPad, height: f.height)
+            var s = localWindowRect(from: f).insetBy(dx: -Cfg.dockPad, dy: 0)
             // The AX frame can reach a bit above the visible Dock shelf. When the Dock is always
             // shown, the space macOS reserves for it (bottom of visibleFrame) is a better top edge.
-            if let screen = NSScreen.screens.first {
-                let reserved = screen.visibleFrame.minY - screen.frame.minY
-                if reserved > 10 && reserved < s.maxY { s.size.height = reserved - s.minY }
-            }
+            let reserved = screenVisibleFrame.minY - screenFrame.minY
+            if reserved > 10 && reserved < s.maxY { s.size.height = reserved - s.minY }
             // Only handle a Dock that sits at the bottom of the screen and is currently on screen.
             // With auto-hide, a hidden Dock is reported below the screen edge, so it fails this check.
-            if s.width > s.height && s.minY < 40 && s.maxY > 8 {
+            if s.width > s.height && s.minY < 40 && s.maxY > 8,
+               s.intersects(CGRect(origin: .zero, size: size)) {
                 r = s
-                status = "found at x=\(Int(s.minX)) width=\(Int(s.width)) top=\(Int(s.maxY)) (AX top \(Int(size.height - f.minY)), screen \(Int(size.width))x\(Int(size.height)))"
+                status = "found at x=\(Int(s.minX)) width=\(Int(s.width)) top=\(Int(s.maxY)) (AX top \(Int(primaryScreenTop - f.minY - screenFrame.minY)), screen \(Int(size.width))x\(Int(size.height)))"
             } else {
                 status = "ignored (not at bottom or hidden), AX frame = \(f)"
             }
@@ -1369,7 +1399,7 @@ final class SnowScene: SKScene {
         }
 
         // Top up flakes (max 6 per frame so they don't appear in a row)
-        let deficit = min(6, Cfg.targetFlakes - normal)
+        let deficit = min(6, targetFlakes - normal)
         if deficit > 0 { for _ in 0..<deficit { spawnFlake() } }
     }
 }
@@ -1386,21 +1416,11 @@ final class OverlayWindow: NSPanel {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    var window: OverlayWindow!
-    var scene: SnowScene!
-    var statusItem: NSStatusItem!
-    var pauseItem: NSMenuItem!
-    var amountItems: [NSMenuItem] = []
-    var clearingItems: [NSMenuItem] = []
-    var snowballItems: [NSMenuItem] = []
-    let backgroundAppsMenu = NSMenu()
-    private var displaySleeping = false
-    private var sessionInactive = false
+@MainActor final class ScreenOverlay {
+    let window: OverlayWindow
+    let scene: SnowScene
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        guard let screen = NSScreen.screens.first else { return }
-        // A non-activating panel can take a click (to grab a snowball) without stealing focus from your apps
+    init(screen: NSScreen) {
         window = OverlayWindow(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel],
                                backing: .buffered, defer: false)
         window.hidesOnDeactivate = false
@@ -1408,19 +1428,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
-        window.ignoresMouseEvents = true          // clicks pass straight through
-        window.level = .floating                  // above normal windows, below the Dock and menu bar
+        window.ignoresMouseEvents = true
+        window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
-
         scene = SnowScene(size: screen.frame.size)
-        scene.refreshBackgroundApplications()
         scene.scaleMode = .resizeFill
-        refreshOverlay()
+        scene.refreshBackgroundApplications()
+    }
 
+    func refresh(screen: NSScreen, primaryTop: CGFloat, paused: Bool, suspended: Bool, areaShare: CGFloat) {
+        if scene.screenFrame != screen.frame { scene.clearAll() }
+        scene.screenFrame = screen.frame
+        scene.screenVisibleFrame = screen.visibleFrame
+        scene.primaryScreenTop = primaryTop
+        scene.size = screen.frame.size
+        scene.targetFlakes = max(1, Int((CGFloat(Cfg.targetFlakes) * areaShare).rounded()))
+        scene.clumpLimit = max(1, Int((CGFloat(Cfg.maxClumps) * areaShare).rounded()))
+        scene.snowfallPaused = paused
+        window.setFrame(screen.frame, display: true)
+        if suspended {
+            hide()
+            return
+        }
+        guard !(window.contentView is OverlaySKView) else { return }
+        // A fresh renderer after wake avoids a stale display link.
+        let view = OverlaySKView(frame: CGRect(origin: .zero, size: screen.frame.size))
+        view.allowsTransparency = true
+        view.preferredFramesPerSecond = 60
+        view.ignoresSiblingOrder = true
+        window.contentView = view
+        scene.resetFrameClock()
+        view.presentScene(scene)
+        window.orderFrontRegardless()
+    }
+
+    func hide() {
+        window.ignoresMouseEvents = true
+        window.orderOut(nil)
+        scene.endDrag()
+        (window.contentView as? SKView)?.presentScene(nil)
+        window.contentView = nil
+    }
+}
+
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    var overlays: [CGDirectDisplayID: ScreenOverlay] = [:]
+    var scenes: [SnowScene] { overlays.values.map { $0.scene } }
+    var statusItem: NSStatusItem!
+    var pauseItem: NSMenuItem!
+    var amountItems: [NSMenuItem] = []
+    var clearingItems: [NSMenuItem] = []
+    var snowballItems: [NSMenuItem] = []
+    let backgroundAppsMenu = NSMenu()
+    var backgroundApplications = Set(UserDefaults.standard.stringArray(forKey: "backgroundApplications") ?? [])
+    var snowfallPaused = false
+    private var displaySleeping = false
+    private var sessionInactive = false
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        refreshOverlays()
         setupMenu()
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
-
         let ws = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             ws.addObserver(self, selector: #selector(applicationsChanged), name: name, object: nil)
@@ -1439,40 +1508,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case NSWorkspace.sessionDidBecomeActiveNotification: sessionInactive = false
         default: return
         }
-        refreshOverlay()
+        refreshOverlays()
     }
 
     @objc func applicationsChanged() {
-        scene.refreshBackgroundApplications()
+        for scene in scenes { scene.refreshBackgroundApplications() }
     }
 
-    private func refreshOverlay() {
-        guard !displaySleeping, !sessionInactive, let screen = NSScreen.screens.first else {
-            window.ignoresMouseEvents = true
-            window.orderOut(nil)
-            scene.endDrag()
-            (window.contentView as? SKView)?.presentScene(nil)
-            window.contentView = nil
-            return
+    func refreshOverlays() {
+        let screens = NSScreen.screens
+        let primaryTop = screens.first?.frame.maxY ?? 0
+        let totalArea = max(1, screens.reduce(CGFloat.zero) { $0 + $1.frame.width * $1.frame.height })
+        var connected: Set<CGDirectDisplayID> = []
+        for screen in screens {
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { continue }
+            let id = number.uint32Value
+            connected.insert(id)
+            let overlay = overlays[id] ?? ScreenOverlay(screen: screen)
+            overlays[id] = overlay
+            overlay.refresh(screen: screen, primaryTop: primaryTop, paused: snowfallPaused,
+                            suspended: displaySleeping || sessionInactive,
+                            areaShare: screen.frame.width * screen.frame.height / totalArea)
         }
-        window.setFrame(screen.frame, display: true)
-        guard !(window.contentView is OverlaySKView) else { return }
-
-        // Recreate the renderer after sleep while keeping the accumulated snow in the scene.
-        let view = OverlaySKView(frame: NSRect(origin: .zero, size: screen.frame.size))
-        view.allowsTransparency = true
-        view.preferredFramesPerSecond = 60
-        view.ignoresSiblingOrder = true
-        window.contentView = view
-        scene.resetFrameClock()
-        view.presentScene(scene)
-        window.orderFrontRegardless()
+        for id in Set(overlays.keys).subtracting(connected) {
+            overlays.removeValue(forKey: id)?.hide()
+        }
     }
 
     func setupMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "❄︎"
         let menu = NSMenu()
+        menu.appearance = NSAppearance(named: .darkAqua)
 
         pauseItem = NSMenuItem(title: "Pause Snow", action: #selector(togglePause), keyEquivalent: "p")
         pauseItem.target = self
@@ -1497,7 +1564,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let item = NSMenuItem(title: mode.title, action: #selector(setClearingMode(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = mode.rawValue
-            item.state = mode == scene.clearingMode ? .on : .off
+            item.state = mode.rawValue == (UserDefaults.standard.string(forKey: "clearingMode") ?? ClearingMode.slide.rawValue) ? .on : .off
             clearingMenu.addItem(item)
             clearingItems.append(item)
         }
@@ -1510,7 +1577,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let item = NSMenuItem(title: mode.title, action: #selector(setSnowballMode(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = mode.rawValue
-            item.state = mode == scene.snowballMode ? .on : .off
+            item.state = mode.rawValue == (UserDefaults.standard.string(forKey: "snowballMode") ?? SnowballMode.enabled.rawValue) ? .on : .off
             snowmanMenu.addItem(item)
             snowballItems.append(item)
         }
@@ -1532,32 +1599,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func togglePause() {
-        scene.snowfallPaused.toggle()
-        scene.resetFrameClock()
-        if scene.snowfallPaused {
-            scene.endDrag()
-            window.ignoresMouseEvents = true
+        snowfallPaused.toggle()
+        for overlay in overlays.values {
+            overlay.scene.snowfallPaused = snowfallPaused
+            overlay.scene.resetFrameClock()
+            if snowfallPaused {
+                overlay.scene.endDrag()
+                overlay.window.ignoresMouseEvents = true
+            }
         }
-        pauseItem.title = scene.snowfallPaused ? "Resume Snow" : "Pause Snow"
+        pauseItem.title = snowfallPaused ? "Resume Snow" : "Pause Snow"
     }
 
     @objc func setAmount(_ sender: NSMenuItem) {
         Cfg.targetFlakes = sender.tag
+        refreshOverlays()
         for it in amountItems { it.state = (it === sender) ? .on : .off }
     }
 
-    @objc func clearSnow() { scene.clearAll() }
+    @objc func clearSnow() { for scene in scenes { scene.clearAll() } }
 
     @objc func setClearingMode(_ sender: NSMenuItem) {
         guard let value = sender.representedObject as? String, let mode = ClearingMode(rawValue: value) else { return }
-        scene.clearingMode = mode
+        for scene in scenes { scene.clearingMode = mode }
         UserDefaults.standard.set(mode.rawValue, forKey: "clearingMode")
         for item in clearingItems { item.state = item === sender ? .on : .off }
     }
 
     @objc func setSnowballMode(_ sender: NSMenuItem) {
         guard let value = sender.representedObject as? String, let mode = SnowballMode(rawValue: value) else { return }
-        scene.snowballMode = mode
+        for scene in scenes { scene.snowballMode = mode }
         UserDefaults.standard.set(mode.rawValue, forKey: "snowballMode")
         for item in snowballItems { item.state = item === sender ? .on : .off }
     }
@@ -1567,10 +1638,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.removeAllItems()
         var names: [String: String] = [:]
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
-            guard let id = app.bundleIdentifier, app.processIdentifier != scene.myPID else { continue }
+            guard let id = app.bundleIdentifier, app.processIdentifier != getpid() else { continue }
             names[id] = app.localizedName ?? id
         }
-        for id in scene.backgroundApplications where names[id] == nil {
+        for id in backgroundApplications where names[id] == nil {
             names[id] = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)?
                 .deletingPathExtension().lastPathComponent ?? id
         }
@@ -1578,25 +1649,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let item = NSMenuItem(title: name, action: #selector(toggleBackgroundApplication(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = id
-            item.state = scene.backgroundApplications.contains(id) ? .on : .off
+            item.state = backgroundApplications.contains(id) ? .on : .off
             menu.addItem(item)
         }
     }
 
     @objc func toggleBackgroundApplication(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
-        if scene.backgroundApplications.contains(id) {
-            scene.backgroundApplications.remove(id)
+        if backgroundApplications.contains(id) {
+            backgroundApplications.remove(id)
         } else {
-            scene.backgroundApplications.insert(id)
+            backgroundApplications.insert(id)
         }
-        sender.state = scene.backgroundApplications.contains(id) ? .on : .off
-        UserDefaults.standard.set(scene.backgroundApplications.sorted(), forKey: "backgroundApplications")
-        scene.refreshBackgroundApplications()
+        sender.state = backgroundApplications.contains(id) ? .on : .off
+        UserDefaults.standard.set(backgroundApplications.sorted(), forKey: "backgroundApplications")
+        for scene in scenes {
+            scene.backgroundApplications = backgroundApplications
+            scene.refreshBackgroundApplications()
+        }
     }
 
     @objc func screensChanged() {
-        refreshOverlay()
+        refreshOverlays()
     }
 }
 
@@ -1612,8 +1686,10 @@ func migratePreferences() {
 
 migratePreferences()
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.setActivationPolicy(.accessory)   // no Dock icon
-app.run()
+MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    app.delegate = delegate
+    app.setActivationPolicy(.accessory)
+    app.run()
+}

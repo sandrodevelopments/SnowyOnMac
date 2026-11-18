@@ -8,6 +8,7 @@ app="$stage/SnowyOnMac.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp Info.plist "$app/Contents/Info.plist"
 cp LICENSE "$app/Contents/Resources/LICENSE"
+cp Assets/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 
 xcrun swiftc -O -target arm64-apple-macosx13.0 \
     -module-cache-path "$stage/module-cache" SnowyOnMac.swift \

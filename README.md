@@ -8,11 +8,23 @@ Animierter Schnee für den Mac. Schnee bleibt auf Fenstern, dem Dock und am unte
 
 Benötigt einen Mac mit Apple-Chip (M1 oder neuer) und macOS 13 oder neuer. Getestet auf einem Mac mit Apple-Chip unter macOS 26. Ältere macOS-Versionen wurden nicht auf eigenen Geräten getestet.
 
+SnowyOnMac verwendet ein dunkles App-Icon und ein dunkles Menü.
+
 Die privat gebaute App ist lokal signiert und wurde nicht von Apple notarisiert. macOS kann den ersten Start blockieren. Apples Hinweise zum Umgang mit einer solchen App stehen hier.
 
 [Apples Hinweise zum ersten Start](https://support.apple.com/de-de/102445)
 
 Für Schnee auf dem Dock unter Systemeinstellungen → Datenschutz & Sicherheit → Bedienungshilfen den Zugriff für SnowyOnMac aktivieren.
+
+## Mehrere Bildschirme
+
+Für jeden angeschlossenen Monitor wird eine eigene transparente Schnee-Ansicht angelegt. Fenster- und Mauspositionen werden in die lokalen Bildschirmkoordinaten umgerechnet. Das gilt auch für links, oberhalb oder unterhalb des Hauptbildschirms angeordnete Monitore und unterschiedliche Skalierungen.
+
+Das Flockenbudget wird nach Bildschirmfläche verteilt. Die Fensterliste wird gemeinsam abgefragt. Pause, Schneemenge, Räumart, Kugel-Einstellung und App-Auswahl gelten für alle Monitore. Beim Verbinden, Trennen oder Umordnen von Bildschirmen werden die Ansichten angepasst.
+
+Die Dock-Erkennung unterstützt ein unten angeordnetes Dock auf dem jeweiligen Bildschirm.
+
+Die zusätzlichen Monitoranordnungen wurden simuliert geprüft. Ein Test mit mehreren physisch angeschlossenen Monitoren steht noch aus.
 
 ## Bedienung
 
@@ -26,7 +38,7 @@ Für Schnee auf dem Dock unter Systemeinstellungen → Datenschutz & Sicherheit 
 
 Räumart, Kugel-Einstellung und App-Auswahl werden gespeichert. Eine vorhandene Auswahl der früheren WinterIsComing-Version wird beim ersten Start übernommen.
 
-Abrutschender Schnee fällt hinter seinem Herkunftsfenster. Die Schneeauflagen an gerundeten Fensterkanten sind angenähert. Am unteren Bildschirmrand bleibt eine flache Schneeschicht.
+Abrutschender Schnee fällt hinter seinem Herkunftsfenster. Die Schneeauflagen an gerundeten Fensterkanten sind angenähert. Am unteren Bildschirmrand bleibt eine flache Schneeschicht. Auf dem Dock rutscht die gesamte Auflage bei 9 Punkten Höhe ab. Weitere Klumpen derselben Fensterlawine fallen während der Räumung direkt weiter.
 
 ## Passende Wallpaper
 4k Ultra HD 2160p (3840x2160): [https://image-0.uhdpaper.com/wallpaper/winter-cabin-christmas-tree-snowman-night-4k-wallpaper-uhdpaper.com-858@0@i.jpg](https://image-0.uhdpaper.com/wallpaper/winter-cabin-christmas-tree-snowman-night-4k-wallpaper-uhdpaper.com-858@0@i.jpg)
