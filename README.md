@@ -24,7 +24,7 @@ Das Flockenbudget wird nach Bildschirmfläche verteilt. Die Fensterliste wird ge
 
 Die Dock-Erkennung unterstützt ein unten angeordnetes Dock auf dem jeweiligen Bildschirm.
 
-Die zusätzlichen Monitoranordnungen wurden simuliert geprüft. Ein Test mit mehreren physisch angeschlossenen Monitoren steht noch aus.
+Seit Version 1.3.2 verwenden alle Schnee-Ansichten einen gemeinsamen Animationstakt mit expliziter Metal-Ausgabe. Das verhindert das auf dem getesteten Zwei-Monitor-Aufbau beobachtete Hängenbleiben einer der unabhängigen SpriteKit-Ansichten. Getestet mit dem eingebauten Retina-Display und einem Odyssey G93SC mit 5120 × 1440 Pixeln: rund 60 GPU-Bilder pro Sekunde auf beiden Anzeigen, auch nach Pause/Fortsetzen und simuliertem Aufwachen.
 
 ## Bedienung
 
@@ -56,6 +56,27 @@ zsh build.sh
 ```
 
 Die fertige App für Apple-Chips steht unter `build/SnowyOnMac.app`. Das Skript erstellt einen lokal signierten Build.
+
+## Änderungen mit Git verwalten
+
+Das Repository einmal klonen und anschließend in diesem Ordner arbeiten:
+
+```sh
+git clone https://github.com/sandrodevelopments/SnowyOnMac.git ~/dev/projects/snowy-on-mac
+cd ~/dev/projects/snowy-on-mac
+```
+
+Nach Änderungen bauen, prüfen und zu GitHub übertragen:
+
+```sh
+zsh build.sh
+git status
+git add -A
+git commit -m "Beschreibung der Änderung"
+git push
+```
+
+Die Build-Ordner und ZIP-Dateien werden nicht versioniert. `git push` überträgt den Quellcode; installierbare ZIP-Dateien werden separat als Release veröffentlicht.
 
 ## Herkunft und Lizenz
 

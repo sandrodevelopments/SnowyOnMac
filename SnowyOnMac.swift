@@ -7,6 +7,7 @@
 
 import Cocoa
 import SpriteKit
+import MetalKit
 
 // MARK: - Settings (feel free to tweak)
 
@@ -466,6 +467,7 @@ enum SnowballMode: String, CaseIterable {
 // MARK: - Scene
 
 final class SnowScene: SKScene {
+    weak var overlayWindow: NSWindow?
     var screenFrame = CGRect.zero
     var screenVisibleFrame = CGRect.zero
     var primaryScreenTop: CGFloat = 0
@@ -527,6 +529,10 @@ final class SnowScene: SKScene {
     static let dockID = -2
 
     override func didMove(to view: SKView) {
+        prepareScene()
+    }
+
+    func prepareScene() {
         guard tex == nil else { return }
         backgroundColor = .clear
         tex = makeFlakeTexture()
@@ -725,7 +731,7 @@ final class SnowScene: SKScene {
     /// The overlay normally lets every click through. Only while the mouse is over a snowball (or dragging one)
     /// does it catch clicks, so you can grab the ball without clicking the window underneath.
     func updateMouseCapture() {
-        guard let w = view?.window else { return }
+        guard let w = overlayWindow ?? view?.window else { return }
         let capture = dragBall != nil || ballAt(mousePosition) != nil
         if w.ignoresMouseEvents == capture { w.ignoresMouseEvents = !capture }
     }
@@ -756,7 +762,7 @@ final class SnowScene: SKScene {
     }
 
     override func mouseDown(with event: NSEvent) {
-        let m = event.location(in: self)
+        let m = eventPoint(event)
         guard let b = ballAt(m) else { return }
         // Anything stacked on top of the grabbed ball tumbles off
         var a = above(b)
@@ -776,8 +782,13 @@ final class SnowScene: SKScene {
         dragVel = .zero
     }
 
+    func eventPoint(_ event: NSEvent) -> CGPoint {
+        guard let window = event.window else { return mousePosition }
+        return localPoint(from: window.convertPoint(toScreen: event.locationInWindow))
+    }
+
     override func mouseDragged(with event: NSEvent) {
-        dragTarget = event.location(in: self)
+        dragTarget = eventPoint(event)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -1407,8 +1418,62 @@ final class SnowScene: SKScene {
 // MARK: - Transparent full-screen window + menu bar icon
 
 /// Lets the very first click reach the scene even though this app is never the active app
-final class OverlaySKView: SKView {
+final class OverlayMetalView: MTKView, MTKViewDelegate {
+    private let snowRenderer: SKRenderer
+    private let queue: MTLCommandQueue
+    private let inFlight = DispatchSemaphore(value: 2)
+    private var frameTime: TimeInterval = 0
+    private var previousFrame: TimeInterval = 0
+    private var hasRendered = false
+    let snowScene: SnowScene
+    override var isOpaque: Bool { false }
+
+    init(frame: CGRect, scene: SnowScene, device: MTLDevice) {
+        snowScene = scene
+        snowRenderer = SKRenderer(device: device)
+        queue = device.makeCommandQueue()!
+        super.init(frame: frame, device: device)
+        isPaused = true
+        enableSetNeedsDisplay = false
+        clearColor = MTLClearColorMake(0, 0, 0, 0)
+        colorPixelFormat = .bgra8Unorm
+        (layer as? CAMetalLayer)?.isOpaque = false
+        snowRenderer.ignoresSiblingOrder = true
+        scene.prepareScene()
+        snowRenderer.scene = scene
+        delegate = self
+    }
+
+    required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func renderFrame(at time: TimeInterval, fps: Int) {
+        guard !snowScene.snowfallPaused || !hasRendered else { return }
+        guard time - previousFrame >= 0.9 / Double(fps) else { return }
+        previousFrame = time
+        frameTime = time
+        draw()
+    }
+
+    func draw(in view: MTKView) {
+        guard inFlight.wait(timeout: .now()) == .success else { return }
+        guard let pass = currentRenderPassDescriptor, let drawable = currentDrawable,
+              let buffer = queue.makeCommandBuffer() else { inFlight.signal(); return }
+        snowRenderer.update(atTime: frameTime)
+        snowRenderer.render(withViewport: CGRect(origin: .zero, size: drawableSize),
+                            commandBuffer: buffer, renderPassDescriptor: pass)
+        let semaphore = inFlight
+        buffer.addCompletedHandler { _ in semaphore.signal() }
+        buffer.present(drawable)
+        buffer.commit()
+        hasRendered = true
+    }
+
+    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) { snowScene.mouseDown(with: event) }
+    override func mouseDragged(with event: NSEvent) { snowScene.mouseDragged(with: event) }
+    override func mouseUp(with event: NSEvent) { snowScene.mouseUp(with: event) }
 }
 
 final class OverlayWindow: NSPanel {
@@ -1419,10 +1484,14 @@ final class OverlayWindow: NSPanel {
 @MainActor final class ScreenOverlay {
     let window: OverlayWindow
     let scene: SnowScene
+    private var renderScale: CGFloat = 0
+    private var renderFPS = 0
 
     init(screen: NSScreen) {
-        window = OverlayWindow(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel],
-                               backing: .buffered, defer: false)
+        // This initializer takes coordinates relative to the specified screen.
+        window = OverlayWindow(contentRect: CGRect(origin: .zero, size: screen.frame.size),
+                               styleMask: [.borderless, .nonactivatingPanel],
+                               backing: .buffered, defer: false, screen: screen)
         window.hidesOnDeactivate = false
         window.becomesKeyOnlyIfNeeded = true
         window.isOpaque = false
@@ -1432,11 +1501,20 @@ final class OverlayWindow: NSPanel {
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         scene = SnowScene(size: screen.frame.size)
-        scene.scaleMode = .resizeFill
+        scene.overlayWindow = window
+        // Scene coordinates stay in desktop points, including on Retina displays.
+        scene.scaleMode = .aspectFill
         scene.refreshBackgroundApplications()
     }
 
     func refresh(screen: NSScreen, primaryTop: CGFloat, paused: Bool, suspended: Bool, areaShare: CGFloat) {
+        let fps = max(1, min(60, screen.maximumFramesPerSecond))
+        // Rebind SpriteKit after display layout, scaling or refresh-rate changes.
+        if scene.screenFrame != screen.frame || renderScale != screen.backingScaleFactor || renderFPS != fps {
+            hide()
+        }
+        renderScale = screen.backingScaleFactor
+        renderFPS = fps
         if scene.screenFrame != screen.frame { scene.clearAll() }
         scene.screenFrame = screen.frame
         scene.screenVisibleFrame = screen.visibleFrame
@@ -1450,23 +1528,22 @@ final class OverlayWindow: NSPanel {
             hide()
             return
         }
-        guard !(window.contentView is OverlaySKView) else { return }
-        // A fresh renderer after wake avoids a stale display link.
-        let view = OverlaySKView(frame: CGRect(origin: .zero, size: screen.frame.size))
-        view.allowsTransparency = true
-        view.preferredFramesPerSecond = 60
-        view.ignoresSiblingOrder = true
+        guard !(window.contentView is OverlayMetalView), let device = MTLCreateSystemDefaultDevice() else { return }
+        let view = OverlayMetalView(frame: CGRect(origin: .zero, size: screen.frame.size), scene: scene, device: device)
         window.contentView = view
-        scene.resetFrameClock()
-        view.presentScene(scene)
+        // Attach to the visible target display before SpriteKit starts its frame loop.
         window.orderFrontRegardless()
+        scene.resetFrameClock()
+    }
+
+    func renderFrame(at time: TimeInterval) {
+        (window.contentView as? OverlayMetalView)?.renderFrame(at: time, fps: renderFPS)
     }
 
     func hide() {
         window.ignoresMouseEvents = true
         window.orderOut(nil)
         scene.endDrag()
-        (window.contentView as? SKView)?.presentScene(nil)
         window.contentView = nil
     }
 }
@@ -1484,10 +1561,21 @@ final class OverlayWindow: NSPanel {
     var snowfallPaused = false
     private var displaySleeping = false
     private var sessionInactive = false
+    private var renderTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         refreshOverlays()
         setupMenu()
+        // One clock drives all displays; independent SKView clocks can starve each other.
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.displaySleeping, !self.sessionInactive else { return }
+                let time = ProcessInfo.processInfo.systemUptime
+                for overlay in self.overlays.values { overlay.renderFrame(at: time) }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        renderTimer = timer
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
         let ws = NSWorkspace.shared.notificationCenter
