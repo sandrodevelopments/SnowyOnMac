@@ -31,8 +31,6 @@ Abrutschender Schnee fällt hinter seinem Herkunftsfenster. Die Schneeauflagen a
 ## Passende Wallpaper
 4k Ultra HD 2160p (3840x2160): [https://image-0.uhdpaper.com/wallpaper/winter-cabin-christmas-tree-snowman-night-4k-wallpaper-uhdpaper.com-858@0@i.jpg](https://image-0.uhdpaper.com/wallpaper/winter-cabin-christmas-tree-snowman-night-4k-wallpaper-uhdpaper.com-858@0@i.jpg)
 
-Ultrawide: https://chatgpt.com/s/m_6afd66ae5ce48191b6a131efa434d943
-
 2k Quad HD 1440p (2560x1440): [https://image-0.uhdpaper.com/wallpaper/winter-cabin-christmas-tree-snowman-night-2k-wallpaper-uhdpaper.com-858@0@i.jpg](https://image-0.uhdpaper.com/wallpaper/winter-cabin-christmas-tree-snowman-night-2k-wallpaper-uhdpaper.com-858@0@i.jpg)
 
 Full HD 1080p (1920x1080): [https://image-0.uhdpaper.com/wallpaper/winter-cabin-christmas-tree-snowman-night-hd-wallpaper-uhdpaper.com-858@0@i.jpg](https://image-0.uhdpaper.com/wallpaper/winter-cabin-christmas-tree-snowman-night-hd-wallpaper-uhdpaper.com-858@0@i.jpg)
