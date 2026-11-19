@@ -2,6 +2,8 @@
 
 Animierter Schnee für den Mac. Schnee bleibt auf Fenstern, dem Dock und am unteren Bildschirmrand liegen. Schneekugeln und Schneemänner lassen sich mit der Maus formen.
 
+<img width="3026" height="1359" alt="SCR-20261119-hhsm" src="https://github.com/user-attachments/assets/d1c66916-80b2-4650-af2b-018121d208cb" />
+
 ## Installation
 
 [Das Mac-ZIP aus den Releases herunterladen](https://github.com/sandrodevelopments/SnowyOnMac/releases/latest), entpacken und SnowyOnMac.app in den Ordner Programme ziehen. Die App über die Schneeflocke in der Menüleiste bedienen.
